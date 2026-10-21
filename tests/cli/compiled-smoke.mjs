@@ -16,6 +16,9 @@ const run = (...args) =>
 if (!run('--help').includes('Run local PostgreSQL endpoints through SSH')) {
   throw new Error('CLI help did not start');
 }
+if (run('--version').trim() !== '1.0.0') {
+  throw new Error('CLI version does not match package version');
+}
 if (
   !run('config', 'path').includes(join(home, '.pg-ssh-proxy', 'config.json'))
 ) {

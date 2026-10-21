@@ -37,6 +37,7 @@ pg-ssh-proxy config path     显示配置文件路径
 pg-ssh-proxy config validate 一次列出全部配置错误
 pg-ssh-proxy --no-ui         使用逐行输出
 pg-ssh-proxy --verbose       显示连接阶段、重试次数和耗时
+pg-ssh-proxy --version       显示当前版本
 ```
 
 交互式终端默认显示 fullscreen：左侧是代理状态，中间是 `REQ`、`RES`、`CLOSE` 连接事件，右侧是选中事件的详情。这里的请求和响应只代表 TCP 连接建立过程，不是 SQL 请求或数据库返回内容。
@@ -50,3 +51,11 @@ pg-ssh-proxy --verbose       显示连接阶段、重试次数和耗时
 - 主机身份变化时普通启动拒绝连接；使用 `check` 并输入完整主机名才能替换记录。
 - 日志只包含连接生命周期、耗时和字节汇总，不包含 SQL、数据库认证报文或原始数据。
 - 活跃日志为 `~/.pg-ssh-proxy/logs/pg-ssh-proxy.log`，单文件 5 MiB，最多保留 5 个文件。
+
+## 故障定位
+
+日志是 JSONL，每次启动使用独立 `runId`。定位问题时先保留完整日志目录，再按 `runId`、`event`、`phase`、`errorCode` 和 `connectionId` 过滤；不要只截取最后一行。日志包含版本、平台、Node.js 版本、SSH 状态、重试过程和连接汇总，不包含 SQL、认证报文或数据库返回内容。
+
+```bash
+tail -f ~/.pg-ssh-proxy/logs/pg-ssh-proxy.log
+```

@@ -1,6 +1,10 @@
 import type { Duplex } from 'node:stream';
 
 import type { Config, SshHostConfig } from '../config/config.js';
+import {
+  errorDetails,
+  type ErrorDetails
+} from '../observability/error-details.js';
 import { LocalProxy, type ProxyEvent } from './local-proxy.js';
 
 export interface SshTransport {
@@ -17,15 +21,19 @@ export interface SshTransport {
 
 export type RuntimeStatus =
   | { host: string; status: 'starting' | 'ready' | 'stopping' }
-  | {
+  | (ErrorDetails & {
       host: string;
       status: 'retrying';
+      phase: 'ssh_connect';
       retryInMs: number;
       attempt: number;
       elapsedMs: number;
-      error: string;
-    }
-  | { host: string; status: 'unavailable'; error: string };
+    })
+  | (ErrorDetails & {
+      host: string;
+      status: 'unavailable';
+      phase: 'ssh_connect';
+    });
 
 export interface ProxyRuntimeOptions {
   config: Config;
@@ -162,7 +170,8 @@ export class ProxyRuntime {
           this.#options.onStatus({
             host,
             status: 'unavailable',
-            error: failure.message
+            phase: 'ssh_connect',
+            ...errorDetails(failure)
           });
         } else if (!this.#retrying.has(host)) {
           this.#startReconnect(host, failure);
@@ -175,7 +184,8 @@ export class ProxyRuntime {
               retryInMs: Math.max(0, retry.retryAt - Date.now()),
               attempt: retry.attempt,
               elapsedMs: retry.elapsedMs,
-              error: failure.message
+              phase: 'ssh_connect',
+              ...errorDetails(failure)
             });
           }
         }
@@ -194,7 +204,8 @@ export class ProxyRuntime {
         this.#options.onStatus({
           host,
           status: 'unavailable',
-          error: failure.message
+          phase: 'ssh_connect',
+          ...errorDetails(failure)
         });
       } else {
         this.#startReconnect(host, failure);
@@ -224,7 +235,8 @@ export class ProxyRuntime {
           this.#options.onStatus({
             host,
             status: 'unavailable',
-            error: failure.message
+            phase: 'ssh_connect',
+            ...errorDetails(failure)
           });
           return;
         }
@@ -236,7 +248,8 @@ export class ProxyRuntime {
           retryInMs,
           attempt: attempt + 1,
           elapsedMs: Date.now() - startedAt,
-          error: failure.message
+          phase: 'ssh_connect',
+          ...errorDetails(failure)
         };
         this.#retryStates.set(host, {
           retryAt: Date.now() + retryInMs,
@@ -265,7 +278,8 @@ export class ProxyRuntime {
       this.#options.onStatus({
         host,
         status: 'unavailable',
-        error: failure.message
+        phase: 'ssh_connect',
+        ...errorDetails(failure)
       });
     });
   }

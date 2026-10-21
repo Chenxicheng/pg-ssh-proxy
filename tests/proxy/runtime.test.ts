@@ -73,7 +73,9 @@ class FakeTransport implements SshTransport {
   async connect(): Promise<void> {
     this.connectAttempts += 1;
     if (this.connectAttempts <= this.#failures) {
-      throw new Error('ECONNREFUSED');
+      throw Object.assign(new Error('connect refused'), {
+        code: 'ECONNREFUSED'
+      });
     }
     this.isReady = true;
   }
@@ -163,7 +165,10 @@ describe('runtime lifecycle seam', () => {
       retryInMs: 1000,
       attempt: 1,
       elapsedMs: expect.any(Number),
-      error: 'ECONNREFUSED'
+      phase: 'ssh_connect',
+      error: 'connect refused',
+      errorName: 'Error',
+      errorCode: 'ECONNREFUSED'
     });
     await runtime.stop(100);
   });

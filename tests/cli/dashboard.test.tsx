@@ -41,6 +41,7 @@ describe('fullscreen user-visible seam', () => {
       connectionId: 'connection-123',
       proxy: 'orders-db',
       client: '127.0.0.1:51824',
+      phase: 'local_accept',
       at: Date.now()
     };
     model.proxyEvent(request);
@@ -66,7 +67,10 @@ describe('fullscreen user-visible seam', () => {
       retryInMs: 1000,
       attempt: 1,
       elapsedMs: 250,
-      error: 'ECONNREFUSED'
+      phase: 'ssh_connect',
+      error: 'connect refused',
+      errorName: 'Error',
+      errorCode: 'ECONNREFUSED'
     });
     const onQuit = vi.fn();
     const onRetry = vi.fn();
@@ -92,7 +96,9 @@ describe('fullscreen user-visible seam', () => {
       formatStatusLine({
         host: 'production',
         status: 'unavailable',
-        error: 'SSH authentication failed'
+        phase: 'ssh_connect',
+        error: 'SSH authentication failed',
+        errorName: 'Error'
       })
     ).toBe(
       '[UNAVAILABLE] production · SSH authentication failed · action required'

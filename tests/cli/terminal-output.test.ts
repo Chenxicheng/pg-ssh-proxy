@@ -13,6 +13,7 @@ describe('line-mode output', () => {
         bytesFromClient: 32,
         bytesToClient: 64,
         reason: 'client closed',
+        phase: 'client_socket',
         at: 0
       })
     ).toBe(

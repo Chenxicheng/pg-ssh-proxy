@@ -6,7 +6,7 @@ export function formatProxyEvent(event: ProxyEvent): string {
   if (event.type === 'request')
     return `[REQ] ${prefix} · ${sanitizeTerminal(event.client)}`;
   if (event.type === 'response') {
-    return `[RES] ${prefix} · ${event.status} · ${event.elapsedMs}ms${event.error ? ` · ${sanitizeTerminal(event.error)}` : ''}`;
+    return `[RES] ${prefix} · ${event.status} · ${event.elapsedMs}ms${event.error ? ` · ${sanitizeTerminal(event.error)}` : ''}${event.errorCode ? ` · code=${event.errorCode}` : ''}`;
   }
-  return `[CLOSE] ${prefix} · ${sanitizeTerminal(event.reason)} · ${event.elapsedMs}ms · ${event.bytesFromClient}B up · ${event.bytesToClient}B down`;
+  return `[CLOSE] ${prefix} · ${sanitizeTerminal(event.reason)}${event.errorCode ? ` · code=${event.errorCode}` : ''} · ${event.elapsedMs}ms · ${event.bytesFromClient}B up · ${event.bytesToClient}B down`;
 }

@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 
+import { randomUUID } from 'node:crypto';
 import { access } from 'node:fs/promises';
 
 import { Command } from 'commander';
 import { render, type Instance } from 'ink';
 import React from 'react';
+
+import packageJson from '../../package.json' with { type: 'json' };
 
 import {
   addProxy,
@@ -38,11 +41,14 @@ import {
   createEventLogger,
   type EventLogger
 } from '../observability/logger.js';
+import { errorDetails } from '../observability/error-details.js';
 import { KnownHosts } from '../proxy/known-hosts.js';
 import { ProxyRuntime } from '../proxy/runtime.js';
 import { SshConnection } from '../proxy/ssh-connection.js';
 
 const paths = appPaths();
+
+type ShutdownReason = 'user' | 'sigint' | 'sigterm' | 'fatal' | 'log_error';
 
 function configIssueAction(issue: string): string {
   if (/must not be stored/i.test(issue))
@@ -127,6 +133,7 @@ async function runProxy(
   noUi: boolean,
   verbose: boolean
 ): Promise<void> {
+  const startedAtMs = Date.now();
   const startedAt = new Date().toISOString();
   const runtimeLock = await acquireRuntimeLock(paths.runtime, {
     pid: process.pid,
@@ -170,9 +177,20 @@ async function runProxy(
   const knownHosts = new KnownHosts(paths.knownHosts);
   let logger: EventLogger;
   try {
-    logger = createEventLogger(paths.logs, { size: '5M', rotate: 4 }, (error) =>
-      requestShutdown(error)
-    );
+    logger = createEventLogger(paths.logs, {
+      context: { runId: randomUUID(), version: packageJson.version },
+      rotation: { size: '5M', rotate: 4 },
+      onError: (error) => requestShutdown('log_error', error),
+      onWarning: (error) =>
+        console.error(
+          `Log rotation warning: ${sanitizeTerminal(error.message)}. Logging continues.`
+        )
+    });
+    logger.lifecycle({
+      status: 'starting',
+      proxyCount: Object.keys(config.proxies).length,
+      sshHostCount: Object.keys(config.sshHosts).length
+    });
   } catch (error) {
     await runtimeLock.release();
     throw error;
@@ -233,7 +251,10 @@ async function runProxy(
     }
   });
 
-  async function shutdown(fatalError?: Error): Promise<void> {
+  async function shutdown(
+    reason: ShutdownReason,
+    fatalError?: Error
+  ): Promise<void> {
     if (shuttingDown) {
       await runtime.stop(0);
       return;
@@ -241,6 +262,14 @@ async function runProxy(
     shuttingDown = true;
     promptController.abort();
     model.stopping(Date.now() + 10_000, () => runtime.activeConnections);
+    if (reason !== 'log_error') {
+      logger.lifecycle({
+        status: 'stopping',
+        reason,
+        activeConnections: runtime.activeConnections,
+        ...(fatalError ? errorDetails(fatalError) : {})
+      });
+    }
     if (fatalError) {
       view?.unmount();
       console.error(
@@ -249,6 +278,12 @@ async function runProxy(
     }
     try {
       await runtime.stop(10_000);
+      if (reason !== 'log_error') {
+        logger.lifecycle({
+          status: 'stopped',
+          elapsedMs: Date.now() - startedAtMs
+        });
+      }
     } finally {
       view?.unmount();
       try {
@@ -260,8 +295,8 @@ async function runProxy(
     }
   }
 
-  function requestShutdown(fatalError?: Error): void {
-    void shutdown(fatalError).catch(async (error: unknown) => {
+  function requestShutdown(reason: ShutdownReason, fatalError?: Error): void {
+    void shutdown(reason, fatalError).catch(async (error: unknown) => {
       view?.unmount();
       console.error(
         `Forced cleanup failed: ${sanitizeTerminal(error instanceof Error ? error.message : String(error))}`
@@ -275,15 +310,17 @@ async function runProxy(
     });
   }
 
-  const onSignal = () => requestShutdown();
+  const onSigint = () => requestShutdown('sigint');
+  const onSigterm = () => requestShutdown('sigterm');
   const onFatal = (reason: unknown) => {
     process.exitCode = 1;
     requestShutdown(
+      'fatal',
       reason instanceof Error ? reason : new Error(String(reason))
     );
   };
-  process.on('SIGINT', onSignal);
-  process.on('SIGTERM', onSignal);
+  process.on('SIGINT', onSigint);
+  process.on('SIGTERM', onSigterm);
   process.on('uncaughtException', onFatal);
   process.on('unhandledRejection', onFatal);
 
@@ -291,7 +328,7 @@ async function runProxy(
     view = render(
       <Dashboard
         model={model}
-        onQuit={() => requestShutdown()}
+        onQuit={() => requestShutdown('user')}
         onRetry={(host) => void runtime.retryNow(host)}
         verbose={verbose}
       />,
@@ -308,6 +345,10 @@ async function runProxy(
       await exited;
       return;
     }
+    logger.lifecycle({
+      status: 'ready',
+      startupMs: Date.now() - startedAtMs
+    });
     if (lineMode) {
       console.log('Proxy is running. Press Ctrl+C to stop.');
     } else {
@@ -315,6 +356,11 @@ async function runProxy(
     }
     await exited;
   } catch (error) {
+    logger.lifecycle({
+      status: 'failed',
+      phase: 'runtime_start',
+      ...errorDetails(error)
+    });
     try {
       await runtime.stop(0);
     } finally {
@@ -326,8 +372,8 @@ async function runProxy(
     }
     throw error;
   } finally {
-    process.off('SIGINT', onSignal);
-    process.off('SIGTERM', onSignal);
+    process.off('SIGINT', onSigint);
+    process.off('SIGTERM', onSigterm);
     process.off('uncaughtException', onFatal);
     process.off('unhandledRejection', onFatal);
   }
@@ -359,6 +405,7 @@ async function defaultAction(options: {
 const program: Command = new Command()
   .name('pg-ssh-proxy')
   .description('Run local PostgreSQL endpoints through SSH')
+  .version(packageJson.version)
   .option('--no-ui', 'use line-oriented output instead of fullscreen')
   .option('--verbose', 'show filtered technical error details')
   .showHelpAfterError();

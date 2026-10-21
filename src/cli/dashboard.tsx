@@ -18,6 +18,7 @@ interface ProxyView {
   target: string;
   status: RuntimeStatus['status'];
   error?: string;
+  errorCode?: string;
   retryAt?: number;
   attempt?: number;
   elapsedMs?: number;
@@ -100,6 +101,9 @@ export class DashboardModel {
           ...(status && 'error' in status && status.error
             ? { error: status.error }
             : {}),
+          ...(status && 'errorCode' in status && status.errorCode
+            ? { errorCode: status.errorCode }
+            : {}),
           ...(retryAt ? { retryAt } : {}),
           ...(status?.status === 'retrying'
             ? { attempt: status.attempt, elapsedMs: status.elapsedMs }
@@ -131,9 +135,9 @@ function eventSummary(event: ProxyEvent): string {
   if (event.type === 'response') {
     return event.status === 'connected'
       ? `connected ${event.elapsedMs}ms`
-      : sanitizeTerminal(event.error ?? 'failed');
+      : `${sanitizeTerminal(event.error ?? 'failed')}${event.errorCode ? ` [${event.errorCode}]` : ''}`;
   }
-  return `${sanitizeTerminal(event.reason)} · ${event.elapsedMs}ms · ${event.bytesFromClient}B ↑ · ${event.bytesToClient}B ↓`;
+  return `${sanitizeTerminal(event.reason)}${event.errorCode ? ` [${event.errorCode}]` : ''} · ${event.elapsedMs}ms · ${event.bytesFromClient}B ↑ · ${event.bytesToClient}B ↓`;
 }
 
 export function formatStatusLine(
@@ -143,12 +147,15 @@ export function formatStatusLine(
   const prefix = `[${status.status.toUpperCase()}] ${status.host}`;
   if (status.status === 'retrying') {
     const detail = verbose
-      ? ` · phase=ssh_connect · attempt=${status.attempt} · elapsed=${status.elapsedMs}ms`
+      ? ` · phase=${status.phase} · attempt=${status.attempt} · elapsed=${status.elapsedMs}ms${status.errorCode ? ` · code=${status.errorCode}` : ''}`
       : '';
     return `${prefix} · ${sanitizeTerminal(status.error)} · retry in ${Math.ceil(status.retryInMs / 1000)}s${detail}`;
   }
   if (status.status === 'unavailable') {
-    return `${prefix} · ${sanitizeTerminal(status.error)} · action required`;
+    const detail = verbose
+      ? ` · phase=${status.phase}${status.errorCode ? ` · code=${status.errorCode}` : ''}`
+      : '';
+    return `${prefix} · ${sanitizeTerminal(status.error)} · action required${detail}`;
   }
   return prefix;
 }
@@ -267,6 +274,7 @@ export function Dashboard({
                   {' '}
                   phase=ssh_connect · attempt={proxy.attempt} · elapsed=
                   {proxy.elapsedMs}ms
+                  {proxy.errorCode ? ` · code=${proxy.errorCode}` : ''}
                 </Text>
               ) : null}
             </Box>

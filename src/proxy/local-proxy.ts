@@ -7,12 +7,18 @@ import {
 } from 'node:net';
 import type { Duplex } from 'node:stream';
 
+import {
+  errorDetails,
+  type ErrorDetails
+} from '../observability/error-details.js';
+
 export type ProxyEvent =
   | {
       type: 'request';
       connectionId: string;
       proxy: string;
       client: string;
+      phase: 'local_accept';
       at: number;
     }
   | {
@@ -20,8 +26,11 @@ export type ProxyEvent =
       connectionId: string;
       proxy: string;
       status: 'connected' | 'failed';
+      phase: 'forward_out';
       elapsedMs: number;
       error?: string;
+      errorName?: string;
+      errorCode?: string;
       at: number;
     }
   | {
@@ -32,6 +41,9 @@ export type ProxyEvent =
       bytesFromClient: number;
       bytesToClient: number;
       reason: string;
+      phase: 'client_socket' | 'ssh_channel' | 'shutdown';
+      errorName?: string;
+      errorCode?: string;
       at: number;
     };
 
@@ -56,7 +68,11 @@ export interface LocalProxyOptions {
 interface ActiveConnection {
   socket: Socket;
   channel?: Duplex;
-  close?: (reason: string) => void;
+  close?: (
+    reason: string,
+    phase: 'client_socket' | 'ssh_channel' | 'shutdown',
+    failure?: ErrorDetails
+  ) => void;
 }
 
 export class LocalProxy {
@@ -129,7 +145,7 @@ export class LocalProxy {
   #closeActive(reason: string): void {
     for (const connection of this.#active.values()) {
       if (connection.close) {
-        connection.close(reason);
+        connection.close(reason, 'shutdown');
       } else {
         connection.channel?.destroy();
         connection.socket.destroy();
@@ -149,6 +165,7 @@ export class LocalProxy {
       connectionId,
       proxy: this.#options.name,
       client: `${sourceHost}:${sourcePort}`,
+      phase: 'local_accept',
       at: startedAt
     });
 
@@ -161,14 +178,16 @@ export class LocalProxy {
         targetPort: this.#options.target.port
       });
     } catch (error) {
+      const failure = errorDetails(error);
       this.#active.delete(connectionId);
       this.#options.onEvent({
         type: 'response',
         connectionId,
         proxy: this.#options.name,
         status: 'failed',
+        phase: 'forward_out',
         elapsedMs: Date.now() - startedAt,
-        error: error instanceof Error ? error.message : String(error),
+        ...failure,
         at: Date.now()
       });
       socket.destroy();
@@ -181,6 +200,7 @@ export class LocalProxy {
       connectionId,
       proxy: this.#options.name,
       status: 'connected',
+      phase: 'forward_out',
       elapsedMs: Date.now() - startedAt,
       at: Date.now()
     });
@@ -194,7 +214,11 @@ export class LocalProxy {
     channel.on('data', (chunk: Buffer) => {
       bytesToClient += chunk.length;
     });
-    const close = (reason: string) => {
+    const close = (
+      reason: string,
+      phase: 'client_socket' | 'ssh_channel' | 'shutdown',
+      failure?: ErrorDetails
+    ) => {
       if (closed) return;
       closed = true;
       this.#active.delete(connectionId);
@@ -208,16 +232,27 @@ export class LocalProxy {
         bytesFromClient,
         bytesToClient,
         reason,
+        phase,
+        ...(failure
+          ? {
+              errorName: failure.errorName,
+              ...(failure.errorCode ? { errorCode: failure.errorCode } : {})
+            }
+          : {}),
         at: Date.now()
       });
     };
     active.close = close;
-    socket.once('error', (error) => close(`client error: ${error.message}`));
-    channel.once('error', (error) =>
-      close(`SSH channel error: ${error.message}`)
-    );
-    socket.once('close', () => close('client closed'));
-    channel.once('close', () => close('SSH channel closed'));
+    socket.once('error', (error) => {
+      const failure = errorDetails(error);
+      close(`client error: ${failure.error}`, 'client_socket', failure);
+    });
+    channel.once('error', (error) => {
+      const failure = errorDetails(error);
+      close(`SSH channel error: ${failure.error}`, 'ssh_channel', failure);
+    });
+    socket.once('close', () => close('client closed', 'client_socket'));
+    channel.once('close', () => close('SSH channel closed', 'ssh_channel'));
     socket.pipe(channel);
     channel.pipe(socket);
   }

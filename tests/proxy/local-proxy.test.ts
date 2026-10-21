@@ -59,7 +59,9 @@ describe('local TCP to SSH channel seam', () => {
       localPort: 0,
       target: { host: 'billing.internal', port: 5432 },
       openChannel: async () => {
-        throw new Error('SSH unavailable');
+        throw Object.assign(new Error('SSH unavailable'), {
+          code: 'ENETUNREACH'
+        });
       },
       onEvent: (event) => events.push(event)
     });
@@ -76,7 +78,10 @@ describe('local TCP to SSH channel seam', () => {
     expect(events[1]).toMatchObject({
       type: 'response',
       status: 'failed',
-      error: 'SSH unavailable'
+      phase: 'forward_out',
+      error: 'SSH unavailable',
+      errorName: 'Error',
+      errorCode: 'ENETUNREACH'
     });
   });
 });
