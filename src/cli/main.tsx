@@ -50,6 +50,42 @@ const paths = appPaths();
 
 type ShutdownReason = 'user' | 'sigint' | 'sigterm' | 'fatal' | 'log_error';
 
+function openEventLogger(
+  onError: (error: Error) => void = (error) =>
+    console.error(
+      `Log failure: ${sanitizeTerminal(error.message)}. Diagnostic logging stopped.`
+    )
+): EventLogger {
+  return createEventLogger(paths.logs, {
+    context: { runId: randomUUID(), version: packageJson.version },
+    rotation: { size: '5M', rotate: 4 },
+    onError,
+    onWarning: (error) =>
+      console.error(
+        `Log rotation warning: ${sanitizeTerminal(error.message)}. Logging continues.`
+      )
+  });
+}
+
+async function recordStandaloneFailure(
+  phase: 'config' | 'credentials',
+  value: unknown
+): Promise<void> {
+  try {
+    const logger = openEventLogger();
+    logger.lifecycle({
+      status: 'failed',
+      phase,
+      ...errorDetails(value)
+    });
+    await logger.close();
+  } catch (error) {
+    console.error(
+      `Could not write diagnostic log: ${sanitizeTerminal(error instanceof Error ? error.message : String(error))}`
+    );
+  }
+}
+
 function configIssueAction(issue: string): string {
   if (/must not be stored/i.test(issue))
     return 'Delete the secret field; enter it only when prompted.';
@@ -73,27 +109,69 @@ async function withConfigMutation<T>(action: () => Promise<T>): Promise<T> {
   }
 }
 
-async function runCheck(config: Config, requestedName?: string): Promise<void> {
-  const selected = requestedName
-    ? Object.entries(config.proxies).filter(([name]) => name === requestedName)
-    : Object.entries(config.proxies);
-  if (requestedName && selected.length === 0)
-    throw new Error(`Unknown proxy ${requestedName}`);
-  if (selected.length === 0) throw new Error('No proxies configured');
+async function runCheckPhase<T>(
+  logger: EventLogger,
+  context: {
+    phase: 'selection' | 'credentials' | 'ssh_connect' | 'forward_out';
+    sshHost?: string;
+    proxy?: string;
+  },
+  action: () => T | Promise<T>
+): Promise<T> {
+  const startedAt = Date.now();
+  logger.check({ status: 'starting', ...context });
+  try {
+    const result = await action();
+    logger.check({
+      status: 'succeeded',
+      ...context,
+      elapsedMs: Date.now() - startedAt
+    });
+    return result;
+  } catch (error) {
+    logger.check({
+      status: 'failed',
+      ...context,
+      elapsedMs: Date.now() - startedAt,
+      ...errorDetails(error)
+    });
+    throw error;
+  }
+}
 
-  const selectedHosts = new Set(selected.map(([, proxy]) => proxy.sshHost));
-  const checkConfig: Config = {
-    sshHosts: Object.fromEntries(
-      Object.entries(config.sshHosts).filter(([name]) =>
-        selectedHosts.has(name)
-      )
-    ),
-    proxies: Object.fromEntries(selected)
-  };
-  const credentials = await promptCredentials(checkConfig);
-  const knownHosts = new KnownHosts(paths.knownHosts);
+async function runCheck(config: Config, requestedName?: string): Promise<void> {
+  const checkStartedAt = Date.now();
+  const logger = openEventLogger();
   const connections = new Map<string, SshConnection>();
   try {
+    const selected = await runCheckPhase(logger, { phase: 'selection' }, () => {
+      const result = requestedName
+        ? Object.entries(config.proxies).filter(
+            ([name]) => name === requestedName
+          )
+        : Object.entries(config.proxies);
+      if (requestedName && result.length === 0)
+        throw new Error(`Unknown proxy ${requestedName}`);
+      if (result.length === 0) throw new Error('No proxies configured');
+      return result;
+    });
+
+    const selectedHosts = new Set(selected.map(([, proxy]) => proxy.sshHost));
+    const checkConfig: Config = {
+      sshHosts: Object.fromEntries(
+        Object.entries(config.sshHosts).filter(([name]) =>
+          selectedHosts.has(name)
+        )
+      ),
+      proxies: Object.fromEntries(selected)
+    };
+    const credentials = await runCheckPhase(
+      logger,
+      { phase: 'credentials' },
+      () => promptCredentials(checkConfig)
+    );
+
+    const knownHosts = new KnownHosts(paths.knownHosts);
     for (const name of selectedHosts) {
       const host = config.sshHosts[name]!;
       const connection = new SshConnection({
@@ -107,24 +185,37 @@ async function runCheck(config: Config, requestedName?: string): Promise<void> {
       });
       connections.set(name, connection);
       process.stdout.write(`Checking SSH ${name}... `);
-      await connection.connect();
+      await runCheckPhase(logger, { phase: 'ssh_connect', sshHost: name }, () =>
+        connection.connect()
+      );
       console.log('connected');
     }
     for (const [name, proxy] of selected) {
       process.stdout.write(
         `Checking ${name} -> ${proxy.target.host}:${proxy.target.port}... `
       );
-      const channel = await connections.get(proxy.sshHost)!.openChannel({
-        sourceHost: '127.0.0.1',
-        sourcePort: 0,
-        targetHost: proxy.target.host,
-        targetPort: proxy.target.port
-      });
+      const channel = await runCheckPhase(
+        logger,
+        { phase: 'forward_out', sshHost: proxy.sshHost, proxy: name },
+        () =>
+          connections.get(proxy.sshHost)!.openChannel({
+            sourceHost: '127.0.0.1',
+            sourcePort: 0,
+            targetHost: proxy.target.host,
+            targetPort: proxy.target.port
+          })
+      );
       channel.destroy();
       console.log('reachable');
     }
+    logger.check({
+      status: 'succeeded',
+      phase: 'complete',
+      elapsedMs: Date.now() - checkStartedAt
+    });
   } finally {
     for (const connection of connections.values()) connection.close();
+    await logger.close();
   }
 }
 
@@ -167,6 +258,9 @@ async function runProxy(
   try {
     credentials = await promptCredentials(config, promptController.signal);
   } catch (error) {
+    if (!credentialPromptInterrupted) {
+      await recordStandaloneFailure('credentials', error);
+    }
     await runtimeLock.release();
     if (credentialPromptInterrupted) return;
     throw error;
@@ -177,15 +271,7 @@ async function runProxy(
   const knownHosts = new KnownHosts(paths.knownHosts);
   let logger: EventLogger;
   try {
-    logger = createEventLogger(paths.logs, {
-      context: { runId: randomUUID(), version: packageJson.version },
-      rotation: { size: '5M', rotate: 4 },
-      onError: (error) => requestShutdown('log_error', error),
-      onWarning: (error) =>
-        console.error(
-          `Log rotation warning: ${sanitizeTerminal(error.message)}. Logging continues.`
-        )
-    });
+    logger = openEventLogger((error) => requestShutdown('log_error', error));
     logger.lifecycle({
       status: 'starting',
       proxyCount: Object.keys(config.proxies).length,
@@ -267,6 +353,7 @@ async function runProxy(
         status: 'stopping',
         reason,
         activeConnections: runtime.activeConnections,
+        ...(reason === 'fatal' ? { phase: 'process' as const } : {}),
         ...(fatalError ? errorDetails(fatalError) : {})
       });
     }
@@ -336,6 +423,8 @@ async function runProxy(
     );
   };
 
+  let runtimePhase: 'runtime_start' | 'fullscreen' | 'running' =
+    'runtime_start';
   try {
     console.log(
       `Starting ${Object.keys(config.proxies).length} local ${Object.keys(config.proxies).length === 1 ? 'endpoint' : 'endpoints'}...`
@@ -350,15 +439,18 @@ async function runProxy(
       startupMs: Date.now() - startedAtMs
     });
     if (lineMode) {
+      runtimePhase = 'running';
       console.log('Proxy is running. Press Ctrl+C to stop.');
     } else {
+      runtimePhase = 'fullscreen';
       showDashboard();
+      runtimePhase = 'running';
     }
     await exited;
   } catch (error) {
     logger.lifecycle({
       status: 'failed',
-      phase: 'runtime_start',
+      phase: runtimePhase,
       ...errorDetails(error)
     });
     try {
@@ -483,7 +575,7 @@ configCommand
     );
   });
 
-program.parseAsync().catch((error: unknown) => {
+program.parseAsync().catch(async (error: unknown) => {
   if (error instanceof UserCancelledError) {
     console.error(error.message);
   } else if (error instanceof AlreadyRunningError) {
@@ -492,6 +584,7 @@ program.parseAsync().catch((error: unknown) => {
       : 'another process owns the runtime lock';
     console.error(`pg-ssh-proxy is already running (${detail}).`);
   } else if (error instanceof ConfigValidationError) {
+    await recordStandaloneFailure('config', error);
     console.error('Invalid configuration:');
     for (const issue of error.issues) {
       console.error(`- ${sanitizeTerminal(issue)}`);

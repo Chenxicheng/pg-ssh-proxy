@@ -1,7 +1,7 @@
 /* global console, process */
 
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -26,6 +26,38 @@ if (
 }
 if (!run('list').includes('No proxies configured')) {
   throw new Error('CLI list did not handle an empty configuration');
+}
+
+const configDirectory = join(home, '.pg-ssh-proxy');
+mkdirSync(configDirectory, { recursive: true });
+writeFileSync(join(configDirectory, 'config.json'), '{"invalid":true}\n');
+const invalidConfigResult = spawnSync(
+  process.execPath,
+  ['dist/cli/main.js', 'config', 'validate'],
+  {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: home },
+    encoding: 'utf8'
+  }
+);
+if (invalidConfigResult.status !== 1) {
+  throw new Error('CLI accepted an invalid configuration');
+}
+const logEntries = readFileSync(
+  join(configDirectory, 'logs', 'pg-ssh-proxy.log'),
+  'utf8'
+)
+  .trim()
+  .split('\n')
+  .map(JSON.parse);
+const configFailure = logEntries.at(-1);
+if (
+  configFailure?.event !== 'runtime' ||
+  configFailure?.status !== 'failed' ||
+  configFailure?.phase !== 'config' ||
+  configFailure?.version !== '1.0.0'
+) {
+  throw new Error('CLI did not persist safe config diagnostics');
 }
 
 console.log('Compiled CLI smoke test passed');

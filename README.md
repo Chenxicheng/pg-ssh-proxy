@@ -54,7 +54,7 @@ pg-ssh-proxy --version       显示当前版本
 
 ## 故障定位
 
-日志是 JSONL，每次启动使用独立 `runId`。定位问题时先保留完整日志目录，再按 `runId`、`event`、`phase`、`errorCode` 和 `connectionId` 过滤；不要只截取最后一行。日志包含版本、平台、Node.js 版本、SSH 状态、重试过程和连接汇总，不包含 SQL、认证报文或数据库返回内容。
+日志是 JSONL，每次启动或执行 `check` 都使用独立 `runId`。定位问题时先保留完整日志目录，再按 `runId`、`event`、`phase`、`errorCode` 和 `connectionId` 过滤；不要只截取最后一行。日志包含版本、平台、Node.js 版本、配置与凭据失败阶段、SSH 状态、重试过程和连接汇总，不包含 SQL、认证报文或数据库返回内容。
 
 ```bash
 tail -f ~/.pg-ssh-proxy/logs/pg-ssh-proxy.log

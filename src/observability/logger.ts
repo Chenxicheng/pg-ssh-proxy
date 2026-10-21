@@ -5,6 +5,7 @@ import { createStream } from 'rotating-file-stream';
 
 import type { ProxyEvent } from '../proxy/local-proxy.js';
 import type { RuntimeStatus } from '../proxy/runtime.js';
+import type { ErrorDetails } from './error-details.js';
 
 export interface LogRotationOptions {
   size: string;
@@ -28,24 +29,42 @@ export type RuntimeLifecycleEvent =
       sshHostCount: number;
     }
   | { status: 'ready'; startupMs: number }
-  | {
+  | (Partial<ErrorDetails> & {
       status: 'stopping';
       reason: string;
       activeConnections: number;
-      error?: string;
-      errorName?: string;
-      errorCode?: string;
-    }
+      phase?: 'process';
+    })
   | { status: 'stopped'; elapsedMs: number }
-  | {
+  | (ErrorDetails & {
       status: 'failed';
-      phase: 'runtime_start';
-      error: string;
-      errorName: string;
-      errorCode?: string;
-    };
+      phase:
+        'config' | 'credentials' | 'runtime_start' | 'fullscreen' | 'running';
+    });
+
+export type CheckEvent =
+  | {
+      status: 'starting' | 'succeeded';
+      phase:
+        | 'selection'
+        | 'credentials'
+        | 'ssh_connect'
+        | 'forward_out'
+        | 'complete';
+      sshHost?: string;
+      proxy?: string;
+      elapsedMs?: number;
+    }
+  | (ErrorDetails & {
+      status: 'failed';
+      phase: 'selection' | 'credentials' | 'ssh_connect' | 'forward_out';
+      sshHost?: string;
+      proxy?: string;
+      elapsedMs: number;
+    });
 
 export interface EventLogger {
+  check(event: CheckEvent): void;
   lifecycle(event: RuntimeLifecycleEvent): void;
   proxyEvent(event: ProxyEvent): void;
   status(status: RuntimeStatus): void;
@@ -86,6 +105,14 @@ export function createEventLogger(
   let closed = false;
 
   return {
+    check(event) {
+      const entry = { event: 'check', ...event };
+      if (event.status === 'failed') {
+        logger.error(entry);
+      } else {
+        logger.info(entry);
+      }
+    },
     lifecycle(event) {
       const entry = { event: 'runtime', ...event };
       if (event.status === 'failed') {

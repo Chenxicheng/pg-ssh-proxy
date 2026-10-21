@@ -78,13 +78,23 @@ describe('bounded safe JSONL logging', () => {
 
     logger.lifecycle({ status: 'starting', proxyCount: 2, sshHostCount: 1 });
     logger.lifecycle({ status: 'ready', startupMs: 42 });
+    logger.check({
+      status: 'failed',
+      phase: 'forward_out',
+      sshHost: 'production',
+      proxy: 'orders-db',
+      elapsedMs: 25,
+      error: 'network unreachable',
+      errorName: 'Error',
+      errorCode: 'ENETUNREACH'
+    });
     await logger.close();
 
     const entries = (await readFile(join(root, 'pg-ssh-proxy.log'), 'utf8'))
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line) as Record<string, unknown>);
-    expect(entries).toHaveLength(2);
+    expect(entries).toHaveLength(3);
     expect(entries[0]).toMatchObject({
       event: 'runtime',
       status: 'starting',
@@ -101,6 +111,14 @@ describe('bounded safe JSONL logging', () => {
       event: 'runtime',
       status: 'ready',
       startupMs: 42
+    });
+    expect(entries[2]).toMatchObject({
+      event: 'check',
+      status: 'failed',
+      phase: 'forward_out',
+      sshHost: 'production',
+      proxy: 'orders-db',
+      errorCode: 'ENETUNREACH'
     });
   });
 });
