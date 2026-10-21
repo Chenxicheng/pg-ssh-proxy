@@ -349,12 +349,18 @@ async function runProxy(
     promptController.abort();
     model.stopping(Date.now() + 10_000, () => runtime.activeConnections);
     if (reason !== 'log_error') {
+      if (reason === 'fatal' && fatalError) {
+        logger.lifecycle({
+          status: 'failed',
+          phase: 'process',
+          ...errorDetails(fatalError)
+        });
+      }
       logger.lifecycle({
         status: 'stopping',
         reason,
         activeConnections: runtime.activeConnections,
-        ...(reason === 'fatal' ? { phase: 'process' as const } : {}),
-        ...(fatalError ? errorDetails(fatalError) : {})
+        ...(reason === 'fatal' ? { phase: 'process' as const } : {})
       });
     }
     if (fatalError) {

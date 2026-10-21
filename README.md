@@ -50,12 +50,12 @@ pg-ssh-proxy --version       显示当前版本
 - 首次遇到 SSH 主机时必须人工确认 SHA-256 指纹。
 - 主机身份变化时普通启动拒绝连接；使用 `check` 并输入完整主机名才能替换记录。
 - 日志只包含连接生命周期、耗时和字节汇总，不包含 SQL、数据库认证报文或原始数据。
-- 活跃日志为 `~/.pg-ssh-proxy/logs/pg-ssh-proxy.log`，单文件 5 MiB，最多保留 5 个文件。
+- 每次 CLI 调用写入独立的 `~/.pg-ssh-proxy/logs/pg-ssh-proxy-<runId>.log`，不会与并发的运行、`check` 或配置检查争用轮转文件。每次调用单文件 5 MiB，最多保留 5 个文件；已结束调用最多保留 20 次、合计 100 MiB，活跃调用结束后自动收敛。
 
 ## 故障定位
 
 日志是 JSONL，每次启动或执行 `check` 都使用独立 `runId`。定位问题时先保留完整日志目录，再按 `runId`、`event`、`phase`、`errorCode` 和 `connectionId` 过滤；不要只截取最后一行。日志包含版本、平台、Node.js 版本、配置与凭据失败阶段、SSH 状态、重试过程和连接汇总，不包含 SQL、认证报文或数据库返回内容。
 
 ```bash
-tail -f ~/.pg-ssh-proxy/logs/pg-ssh-proxy.log
+tail -f "$(ls -t ~/.pg-ssh-proxy/logs/pg-ssh-proxy-*.log | head -1)"
 ```

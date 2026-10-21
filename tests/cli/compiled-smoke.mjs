@@ -1,7 +1,13 @@
 /* global console, process */
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -43,10 +49,14 @@ const invalidConfigResult = spawnSync(
 if (invalidConfigResult.status !== 1) {
   throw new Error('CLI accepted an invalid configuration');
 }
-const logEntries = readFileSync(
-  join(configDirectory, 'logs', 'pg-ssh-proxy.log'),
-  'utf8'
-)
+const logDirectory = join(configDirectory, 'logs');
+const logFile = readdirSync(logDirectory).find(
+  (file) => file.startsWith('pg-ssh-proxy-') && file.endsWith('.log')
+);
+if (!logFile) {
+  throw new Error('CLI did not create a diagnostic log');
+}
+const logEntries = readFileSync(join(logDirectory, logFile), 'utf8')
   .trim()
   .split('\n')
   .map(JSON.parse);
