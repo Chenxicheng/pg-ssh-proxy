@@ -10,7 +10,11 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { URL } from 'node:url';
 
+const { version } = JSON.parse(
+  readFileSync(new URL('../../package.json', import.meta.url), 'utf8')
+);
 const home = mkdtempSync(join(tmpdir(), 'pg-ssh-proxy-cli-'));
 const run = (...args) =>
   execFileSync(process.execPath, ['dist/cli/main.js', ...args], {
@@ -22,7 +26,7 @@ const run = (...args) =>
 if (!run('--help').includes('Run local PostgreSQL endpoints through SSH')) {
   throw new Error('CLI help did not start');
 }
-if (run('--version').trim() !== '1.0.0') {
+if (run('--version').trim() !== version) {
   throw new Error('CLI version does not match package version');
 }
 if (
@@ -65,7 +69,7 @@ if (
   configFailure?.event !== 'runtime' ||
   configFailure?.status !== 'failed' ||
   configFailure?.phase !== 'config' ||
-  configFailure?.version !== '1.0.0'
+  configFailure?.version !== version
 ) {
   throw new Error('CLI did not persist safe config diagnostics');
 }

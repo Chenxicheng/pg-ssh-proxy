@@ -4,7 +4,7 @@ import React, {
   useState,
   useSyncExternalStore
 } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput, useWindowSize } from 'ink';
 
 import type { Config } from '../config/config.js';
 import type { ProxyEvent } from '../proxy/local-proxy.js';
@@ -173,6 +173,7 @@ export function Dashboard({
   onRetry,
   verbose = false
 }: DashboardProps): React.JSX.Element {
+  const { columns, rows } = useWindowSize();
   const live = useSyncExternalStore(
     model.subscribe,
     model.snapshot,
@@ -237,7 +238,7 @@ export function Dashboard({
   });
 
   return (
-    <Box flexDirection="column" height="100%">
+    <Box flexDirection="column" width={columns} height={rows}>
       <Box justifyContent="space-between" borderStyle="single">
         <Text bold> pg-ssh-proxy </Text>
         <Text>

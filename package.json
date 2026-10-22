@@ -1,6 +1,6 @@
 {
   "name": "pg-ssh-proxy",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Local PostgreSQL proxy over SSH",
   "type": "module",
   "bin": {

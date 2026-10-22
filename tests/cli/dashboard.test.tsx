@@ -33,6 +33,43 @@ function tick(): Promise<void> {
 }
 
 describe('fullscreen user-visible seam', () => {
+  it('fills the terminal on startup and after resizing', async () => {
+    const view = render(
+      <Dashboard
+        model={new DashboardModel(config)}
+        onQuit={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+    try {
+      await tick();
+      expect((view.lastFrame() ?? '').split('\n')).toHaveLength(24);
+
+      for (const [columns, rows] of [
+        [140, 40],
+        [80, 20]
+      ] as const) {
+        Object.defineProperty(view.stdout, 'columns', {
+          value: columns,
+          configurable: true
+        });
+        Object.defineProperty(view.stdout, 'rows', {
+          value: rows,
+          configurable: true
+        });
+        view.stdout.emit('resize');
+        await tick();
+        const lines = (view.lastFrame() ?? '').split('\n');
+        expect(lines).toHaveLength(rows);
+        expect(lines[0]).toHaveLength(columns);
+        expect(lines.at(-2)).toContain('q quit');
+      }
+    } finally {
+      view.unmount();
+      view.cleanup();
+    }
+  });
+
   it('shows proxy status, connection events and selected detail', async () => {
     const model = new DashboardModel(config);
     model.status({ host: 'production', status: 'ready' });
